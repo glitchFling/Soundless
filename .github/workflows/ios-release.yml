@@ -14,16 +14,25 @@ on:
         required: false
         default: 0
         type: number
+      channel:
+        required: false
+        default: stable
+        type: string
   push:
     tags:
       - 'v[0-9]*.[0-9]*.[0-9]*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (for example 0.0.1; no v prefix)'
-        required: true
-        default: '0.0.1'
+        description: 'Optional override; leave empty to read ./VERSION'
+        required: false
+        default: ''
         type: string
+      channel:
+        description: Release channel
+        default: stable
+        type: choice
+        options: [stable, nightly]
 
 permissions:
   contents: write
@@ -55,18 +64,29 @@ jobs:
         id: version
         env:
           INPUT_VERSION: ${{ inputs.version }}
+          CHANNEL: ${{ inputs.channel || 'stable' }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
             VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$VERSION" == *-nightly ]]; then
+              VERSION="${VERSION%-nightly}"
+              CHANNEL=nightly
+            fi
           else
-            VERSION="$INPUT_VERSION"
+            VERSION="${INPUT_VERSION:-$(tr -d '\r\n' < VERSION)}"
           fi
           if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ || "$VERSION" == "0.0.0" ]]; then
             echo "::error::Use a numeric version starting at 0.0.1, such as 0.0.1 or 0.0.2."
             exit 1
           fi
           TAG="v$VERSION"
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            TAG="$TAG-nightly"
+          elif [[ "$CHANNEL" != "stable" ]]; then
+            echo "::error::Channel must be stable or nightly."
+            exit 1
+          fi
           COMMIT="$(git rev-parse HEAD)"
           if git show-ref --verify --quiet "refs/tags/$TAG"; then
             TAG_COMMIT="$(git rev-parse "refs/tags/$TAG^{commit}")"
@@ -77,6 +97,7 @@ jobs:
           fi
           echo "number=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "channel=$CHANNEL" >> "$GITHUB_OUTPUT"
 
       - name: Build iPhone archive
         env:
@@ -116,7 +137,7 @@ jobs:
       - name: Retain build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: MathBeatStudio-${{ steps.version.outputs.number }}-unsigned
+          name: MathBeatStudio-${{ steps.version.outputs.tag }}-unsigned
           path: dist/*
           if-no-files-found: error
 
@@ -124,6 +145,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.number }}
           TAG: ${{ steps.version.outputs.tag }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
         run: |
           set -euo pipefail
           cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
@@ -137,11 +159,13 @@ jobs:
             # Do not replace an asset already published under this version.
             gh release upload "$TAG" "dist/MathBeatStudio-$VERSION-unsigned.ipa" dist/SHA256SUMS.txt
           else
+            PRERELEASE=false
+            if [[ "$CHANNEL" == "nightly" ]]; then PRERELEASE=true; fi
             gh release create "$TAG" \
               "dist/MathBeatStudio-$VERSION-unsigned.ipa" dist/SHA256SUMS.txt \
               --target "$(git rev-parse HEAD)" \
               --title "MathBeat Studio $VERSION" \
-              --prerelease=false \
+              --prerelease="$PRERELEASE" \
               --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
 
@@ -151,6 +175,7 @@ jobs:
         env:
           RELEASE_ISSUE: ${{ inputs.issue_number }}
           RELEASE_VERSION: ${{ steps.version.outputs.number }}
+          RELEASE_CHANNEL: ${{ steps.version.outputs.channel }}
         with:
           script: |
             const { completeReleaseIssue } = require('./.github/scripts/release-issue.cjs');
@@ -158,5 +183,6 @@ jobs:
               github, context,
               issueNumber: Number(process.env.RELEASE_ISSUE),
               version: process.env.RELEASE_VERSION,
+              channel: process.env.RELEASE_CHANNEL,
             });
             if (!completed) throw new Error('Release assets are incomplete; version issue remains open.');

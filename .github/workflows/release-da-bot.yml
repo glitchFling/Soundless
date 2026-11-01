@@ -2,7 +2,9 @@ name: ReleaseDaBot
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +17,10 @@ concurrency:
 
 jobs:
   scan:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.issue.title, 'v')
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'releasedabot')) ||
+      (github.event_name == 'issue_comment' && !github.event.issue.pull_request)
     runs-on: ubuntu-latest
     outputs:
       releases: ${{ steps.scan.outputs.releases }}
@@ -50,3 +55,4 @@ jobs:
       version: ${{ matrix.request.version }}
       source_ref: ${{ needs.scan.outputs.source_ref }}
       issue_number: ${{ matrix.request.issue }}
+      channel: ${{ matrix.request.channel }}

@@ -1,10 +1,10 @@
 ---
 name: Version release
-about: Ask ReleaseDaBot to publish a stable IPA release
-title: 'v0.0.1'
+about: Release the version in ./VERSION; choose stable or nightly
+title: 'Release current VERSION'
+labels: ['releasedabot']
 ---
 
 ```javascript
-version = 0.0.1
 stable;
 ```

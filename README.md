@@ -33,42 +33,39 @@ The project was authored on Windows, where Xcode and the iOS SDK are unavailable
 
 The `iOS Build Check` GitHub Actions workflow compiles for iPhone Simulator on pushes to main and pull requests. Physical-device audio and visual layout still require review on a supported Mac or iPhone.
 
-## GitHub Actions releases
+## ReleaseDaBot
 
-The `iOS IPA Release` workflow runs on a hosted macOS runner, builds an iPhone archive, packages an **unsigned IPA**, and uploads it plus a SHA-256 checksum to GitHub Releases. It uses the repository's built-in `GITHUB_TOKEN`; no Apple signing secrets are needed. Unsigned IPAs require signing with a compatible sideloading tool before installation. This workflow does not produce an App Store/TestFlight distribution build.
+`VERSION` at the repository root is the source for issue-driven releases. It currently contains `0.0.3`. Commit a new value before requesting a new version. Issue titles and legacy `version = ...` lines do not override it.
 
-After pushing this project (including `.github`) to a GitHub repository with Actions enabled, create the first release in either of these ways:
+Use the **Version release** issue template: it applies the `releasedabot` label automatically. Keep either `stable;` or `nightly;` in its body, optionally in a JavaScript code block. Opening, editing, reopening, or labeling a request runs ReleaseDaBot. The repository label must exist for template labels to apply; it is configured in glitchFling/Soundless.
 
-- Open **Actions → iOS IPA Release → Run workflow**, select the desired branch, and leave the version at **0.0.1**. The workflow creates tag `v0.0.1` on the selected commit after the build succeeds.
-- Push an existing version tag:
+To trigger an existing open issue, post one of these exact comments:
 
-  ```sh
-  git tag v0.0.1
-  git push origin v0.0.1
-  ```
-
-For later releases use `0.0.2`, `0.0.3`, etc., manually or through matching `v` tags. The workflow sets the app's marketing version from that release version and its build number from the Actions run number. A manual run cannot reuse a tag pointing to another commit, and published assets are never overwritten. Download `MathBeatStudio-0.0.1-unsigned.ipa` from the release. The IPA and checksum are also retained as workflow artifacts if release publication fails.
-
-The workflow has been statically checked here but has not run on GitHub; this workspace currently has no Git repository or remote configured.
-
-## ReleaseDaBot version issues
-
-Once these workflows are on the repository's default branch, choose the **Version release** issue template. For the first release, use title `v0.0.1` and body:
-
-```javascript
-version = 0.0.1
-stable;
+```text
+releaseabot
+releasedabot
+/releasedabot nightly
+/releasedabot stable
 ```
 
-For example, title `v2.3.3` requires `version = 2.3.3` in the body. These lines are a small declarative format, not executable JavaScript. Only stable releases are currently supported. The version line can optionally end with a semicolon. Both plain text and a single JavaScript code block are accepted; extra commands, duplicate lines, mismatched versions, and `0.0.0` are rejected.
+Both spellings are supported, with optional `/` or `@` prefixes. A command without a channel uses the issue body's `stable;` or `nightly;` setting. An explicit channel overrides the body. Commands target only their issue, including previously unlabeled issues, and apply the label. PR comments, unrelated comments, and closed issues do not publish. The command author must have repository write, maintain, or admin access. Automatic issue requests also require the issue author to have write access.
 
-**ReleaseDaBot** scans all open issues when a version issue is opened, edited, or reopened, or when its workflow is run manually. The initiating user and the issue author must currently have repository write, maintain, or admin permission. Invalid requests generate workflow warnings. Pull requests are excluded. Duplicate versions and versions that already have a GitHub Release are skipped. Closed issues are excluded; reopen one to reconsider it.
+Run **Actions → ReleaseDaBot → Run workflow** to scan all open labeled requests. The workflow summary explains what it selected or why nothing will build. Invalid targeted requests fail with an explanation instead of silently skipping publication.
 
-Pending versions use the existing IPA release workflow in sequence, building one captured commit from the default branch. A stable GitHub Release contains the unsigned IPA and checksum. After verifying both uploaded assets, ReleaseDaBot adds the `releasedabot` label (creating it if necessary) and closes the version issue as completed. Failed builds leave issues open and unlabeled. If issue cleanup fails after publication, a later scan retries cleanup without rebuilding the release. Edited requests are checked again before closing. Inspect the ReleaseDaBot workflow summary and release build logs for status. Failed builds can be retried by running ReleaseDaBot manually. Existing releases with incomplete assets leave their issues open for investigation; the scanner only finishes issue cleanup when both assets are present and uploaded.
+- `stable;` publishes `v0.0.3` as a stable release.
+- `nightly;` publishes `v0.0.3-nightly` as a GitHub prerelease.
 
-ReleaseDaBot is the workflow's display name. Its GitHub activity uses `github-actions[bot]` with the built-in token. A distinct `ReleaseDaBot[bot]` account requires registering and installing a GitHub App and wiring its credentials; that account has not been created or configured here.
+Both use the number from `VERSION` for the app version and Actions run number for its build number. Nightly releases are command-driven; no scheduled release has been configured. Each version/channel tag is immutable: bump `VERSION` to publish another build. Published assets are not overwritten. An already complete release is verified before its requesting issue is closed without rebuilding.
 
-Run parser and scanner tests locally with:
+Successful publication uploads an unsigned IPA and SHA-256 checksum, then keeps the `releasedabot` label and closes the requesting issue as completed. A failed build leaves the issue open. Rescanning retries issue cleanup after a successful publication. Incomplete existing releases remain open for investigation. The label identifies release requests as well as completed releases; closed issue state indicates completion.
+
+ReleaseDaBot builds a captured commit from the default branch using the reusable `iOS IPA Release` workflow. No Apple signing secrets are required. The IPA needs signing with a compatible sideloading tool before installation; it is not an App Store or TestFlight distribution build.
+
+The IPA workflow also supports manual execution (blank version reads `VERSION`, with an optional override and channel selection), or pushing a version tag such as `v0.0.3` or `v0.0.3-nightly`. Direct manual/tag releases do not close an issue unless invoked by ReleaseDaBot with an issue number.
+
+ReleaseDaBot is the workflow display name. GitHub activity uses `github-actions[bot]`; a separate `ReleaseDaBot[bot]` identity requires a GitHub App.
+
+Run parser and scanner tests with:
 
 ```sh
 node --test .github/scripts/release-issue.test.cjs

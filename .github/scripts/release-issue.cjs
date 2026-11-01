@@ -1,107 +1,129 @@
-// Treat issue text as data, never as executable JavaScript.
-function parseReleaseIssue(title, body) {
-  const versionPattern = '(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)';
-  const titleMatch = new RegExp(`^v(${versionPattern})$`).exec(title.trim());
-  if (!titleMatch) return null;
+const fs = require('node:fs');
+const VERSION_PATTERN = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/;
+
+function readVersion(text = fs.readFileSync('VERSION', 'utf8')) {
+  const version = text.trim();
+  if (!VERSION_PATTERN.test(version) || version === '0.0.0') throw new Error('VERSION must contain a version such as 0.0.3 (no v prefix).');
+  return version;
+}
+
+function parseCommand(text) {
+  const match = /^\s*[@/]?release(?:da|a)bot(?:\s+(stable|nightly))?;?\s*$/i.exec(text || '');
+  return match ? { channel: match[1]?.toLowerCase() } : null;
+}
+
+// Issue text is configuration only; never evaluate it as JavaScript.
+function parseReleaseIssue(title, body, versionText, channelOverride) {
+  const version = readVersion(versionText);
+  if (channelOverride) {
+    if (!['stable', 'nightly'].includes(channelOverride)) throw new Error('Unsupported release channel.');
+    return { version, channel: channelOverride, tag: `v${version}${channelOverride === 'nightly' ? '-nightly' : ''}` };
+  }
   let text = (body || '').trim();
   if (text.startsWith('```')) {
     const fence = /^```(?:javascript|js)?\r?\n([\s\S]*?)\r?\n```$/.exec(text);
-    if (!fence) throw new Error('Use one JavaScript code block or two plain-text lines.');
+    if (!fence) throw new Error('Use one code block containing stable; or nightly;');
     text = fence[1];
   }
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const assignment = new RegExp(`^version\\s*=\\s*(${versionPattern});?$`).exec(lines[0] || '');
-  if (lines.length !== 2 || !assignment || lines[1] !== 'stable;') {
-    throw new Error('Expected exactly: version = X.Y.Z followed by stable;');
-  }
-  if (assignment[1] !== titleMatch[1]) throw new Error('Title and body versions must match.');
-  if (assignment[1] === '0.0.0') throw new Error('Versions start at 0.0.1.');
-  return { version: assignment[1], tag: `v${assignment[1]}` };
+  // Accept old templates, but VERSION always wins over title/body version numbers.
+  if (/^version\s*=\s*\d+\.\d+\.\d+;?$/.test(lines[0] || '')) lines.shift();
+  if (lines.length !== 1 || !/^(stable|nightly);$/.test(lines[0])) throw new Error('Expected stable; or nightly; in the issue body. Version comes from ./VERSION.');
+  const channel = channelOverride || lines[0].slice(0, -1);
+  if (!['stable', 'nightly'].includes(channel)) throw new Error('Unsupported release channel.');
+  return { version, channel, tag: `v${version}${channel === 'nightly' ? '-nightly' : ''}` };
 }
 
-async function completeReleaseIssue({ github, context, issueNumber, version, release }) {
-  const repo = context.repo;
-  if (!release) {
-    ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag: `v${version}` }));
-  }
-  const required = [`MathBeatStudio-${version}-unsigned.ipa`, 'SHA256SUMS.txt'];
-  if (release.tag_name !== `v${version}` || release.draft || release.prerelease ||
-      !required.every(name => release.assets?.some(asset => asset.name === name && asset.state === 'uploaded' && asset.size > 0))) {
-    return false;
-  }
-  // Re-read the issue in case the version request changed while the IPA was building.
-  const { data: issue } = await github.rest.issues.get({ ...repo, issue_number: issueNumber });
-  if (issue.pull_request || parseReleaseIssue(issue.title, issue.body)?.version !== version) {
-    throw new Error(`Issue #${issueNumber} no longer requests v${version}; leaving it unchanged.`);
-  }
-  try {
-    await github.rest.issues.getLabel({ ...repo, name: 'releasedabot' });
-  } catch (error) {
+async function ensureLabel(github, repo) {
+  try { await github.rest.issues.getLabel({ ...repo, name: 'releasedabot' }); }
+  catch (error) {
     if (error.status !== 404) throw error;
-    try {
-      await github.rest.issues.createLabel({ ...repo, name: 'releasedabot', color: '91F8BA', description: 'Version released by ReleaseDaBot' });
-    } catch (createError) {
-      // Another release may have created the shared label in the meantime.
-      if (createError.status !== 422) throw createError;
+    try { await github.rest.issues.createLabel({ ...repo, name: 'releasedabot', color: '91F8BA', description: 'ReleaseDaBot release request' }); }
+    catch (error) {
+      if (error.status !== 422) throw error;
       await github.rest.issues.getLabel({ ...repo, name: 'releasedabot' });
     }
   }
+}
+
+async function completeReleaseIssue({ github, context, issueNumber, version, channel = 'stable', release }) {
+  const repo = context.repo;
+  const tag = `v${version}${channel === 'nightly' ? '-nightly' : ''}`;
+  if (!release) ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag }));
+  const required = [`MathBeatStudio-${version}-unsigned.ipa`, 'SHA256SUMS.txt'];
+  if (release.tag_name !== tag || release.draft || Boolean(release.prerelease) !== (channel === 'nightly') ||
+      !required.every(name => release.assets?.some(a => a.name === name && a.state === 'uploaded' && a.size > 0))) return false;
+  const { data: issue } = await github.rest.issues.get({ ...repo, issue_number: issueNumber });
+  if (issue.pull_request) throw new Error('Release requests must be issues, not pull requests.');
+  // Version is pinned by the initiating workflow, not mutable issue text.
+  await ensureLabel(github, repo);
   await github.rest.issues.addLabels({ ...repo, issue_number: issueNumber, labels: ['releasedabot'] });
   await github.rest.issues.update({ ...repo, issue_number: issueNumber, state: 'closed', state_reason: 'completed' });
   return true;
 }
 
-async function scan({ github, context, core }) {
+async function scan({ github, context, core, versionText }) {
   const repo = context.repo;
+  const version = readVersion(versionText);
+  const releases = [];
+  const notes = [`Version source: ./VERSION → ${version}`];
+  const finish = async () => {
+    core.setOutput('releases', JSON.stringify(releases));
+    core.setOutput('has_releases', releases.length ? 'true' : 'false');
+    await core.summary.addHeading('ReleaseDaBot').addRaw(notes.join('\n\n')).write();
+  };
+  const isComment = context.eventName === 'issue_comment';
+  const command = isComment ? parseCommand(context.payload.comment?.body) : null;
+  if (isComment && (!command || context.payload.issue?.pull_request)) {
+    notes.push('No release command on an issue; nothing to do.');
+    return finish();
+  }
   const canRelease = async username => {
     try {
       const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
       return ['admin', 'maintain', 'write'].includes(data.permission);
-    } catch (error) {
-      if (error.status === 404) return false;
-      throw error;
-    }
+    } catch (error) { if (error.status === 404) return false; throw error; }
   };
-  if (!await canRelease(context.actor)) throw new Error('Release scans require repository write access.');
-  const issues = await github.paginate(github.rest.issues.listForRepo, {
-    ...repo, state: 'open', per_page: 100,
-  });
-  const releases = [];
+  if (!await canRelease(context.actor)) throw new Error('Release commands require repository write access.');
+  let issues;
+  if (context.payload?.issue) {
+    const { data } = await github.rest.issues.get({ ...repo, issue_number: context.payload.issue.number });
+    issues = [data];
+  } else {
+    issues = await github.paginate(github.rest.issues.listForRepo, { ...repo, state: 'open', per_page: 100 });
+  }
   const seen = new Set();
   for (const issue of issues) {
-    if (issue.pull_request) continue;
+    if (issue.pull_request || issue.state === 'closed') continue;
+    if (!isComment && !issue.labels?.some(l => (typeof l === 'string' ? l : l.name) === 'releasedabot')) continue;
+    if (!isComment && !await canRelease(issue.user.login)) {
+      notes.push(`Issue #${issue.number}: author needs write access.`); continue;
+    }
     let request;
-    try { request = parseReleaseIssue(issue.title, issue.body); }
-    catch (error) { core.warning(`Issue #${issue.number}: ${error.message}`); continue; }
-    if (!request) continue;
-    if (!await canRelease(issue.user.login)) {
-      core.warning(`Issue #${issue.number}: author needs repository write access.`);
+    try { request = parseReleaseIssue(issue.title, issue.body, version, command?.channel); }
+    catch (error) {
+      core.warning(`Issue #${issue.number}: ${error.message}`);
+      notes.push(`Issue #${issue.number}: ${error.message}`);
+      if (context.payload?.issue) core.setFailed(error.message);
       continue;
     }
+    await ensureLabel(github, repo);
+    await github.rest.issues.addLabels({ ...repo, issue_number: issue.number, labels: ['releasedabot'] });
     let release;
-    try {
-      ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag: request.tag }));
-    } catch (error) { if (error.status !== 404) throw error; }
+    try { ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag: request.tag })); }
+    catch (error) { if (error.status !== 404) throw error; }
     if (release) {
-      const completed = await completeReleaseIssue({ github, context, issueNumber: issue.number, version: request.version, release });
-      core.info(`Issue #${issue.number}: existing release ${completed ? 'verified; labeled and closed' : 'incomplete; issue remains open'}.`);
+      const completed = await completeReleaseIssue({ github, context, issueNumber: issue.number, ...request, release });
+      notes.push(`Issue #${issue.number}: ${request.tag} ${completed ? 'already published; issue closed.' : 'has incomplete assets; issue remains open.'}`);
       continue;
     }
-    if (seen.has(request.version)) continue;
-    seen.add(request.version);
-    releases.push({ version: request.version, issue: issue.number });
+    if (seen.has(request.tag)) { notes.push(`Issue #${issue.number}: duplicate request; retry after publication to close it.`); continue; }
+    seen.add(request.tag);
+    releases.push({ ...request, issue: issue.number });
+    notes.push(`Issue #${issue.number}: building ${request.tag} (${request.channel}).`);
   }
-  releases.sort((a, b) => {
-    const av = a.version.split('.').map(BigInt), bv = b.version.split('.').map(BigInt);
-    for (let i = 0; i < 3; i++) { if (av[i] !== bv[i]) return av[i] < bv[i] ? -1 : 1; }
-    return 0;
-  });
-  if (releases.length > 256) throw new Error('Too many release requests for one scan (maximum 256).');
-  core.setOutput('releases', JSON.stringify(releases));
-  core.setOutput('has_releases', releases.length > 0 ? 'true' : 'false');
-  await core.summary.addHeading('ReleaseDaBot').addRaw(
-    releases.length ? releases.map(r => `Issue #${r.issue}: v${r.version} — stable`).join('\n') : 'No pending stable version issues.'
-  ).write();
+  if (!releases.length) notes.push('No new release build requested. See reasons above.');
+  await finish();
 }
 
-module.exports = { parseReleaseIssue, scan, completeReleaseIssue };
+module.exports = { readVersion, parseCommand, parseReleaseIssue, completeReleaseIssue, scan };
