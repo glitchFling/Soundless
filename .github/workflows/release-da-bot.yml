@@ -1,0 +1,51 @@
+name: ReleaseDaBot
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: read
+
+concurrency:
+  group: release-da-bot
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.event.issue.title, 'v')
+    runs-on: ubuntu-latest
+    outputs:
+      releases: ${{ steps.scan.outputs.releases }}
+      has_releases: ${{ steps.scan.outputs.has_releases }}
+      source_ref: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check all open version issues
+        id: scan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { scan } = require('./.github/scripts/release-issue.cjs');
+            await scan({ github, context, core });
+
+  publish:
+    needs: scan
+    if: needs.scan.outputs.has_releases == 'true'
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        request: ${{ fromJSON(needs.scan.outputs.releases) }}
+    name: Release v${{ matrix.request.version }} (issue #${{ matrix.request.issue }})
+    uses: ./.github/workflows/ios-release.yml
+    with:
+      version: ${{ matrix.request.version }}
+      source_ref: ${{ needs.scan.outputs.source_ref }}
