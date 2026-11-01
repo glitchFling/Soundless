@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write
-  issues: read
+  issues: write
 
 concurrency:
   group: release-da-bot
@@ -49,3 +49,4 @@ jobs:
     with:
       version: ${{ matrix.request.version }}
       source_ref: ${{ needs.scan.outputs.source_ref }}
+      issue_number: ${{ matrix.request.issue }}

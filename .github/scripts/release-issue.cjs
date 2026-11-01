@@ -19,6 +19,38 @@ function parseReleaseIssue(title, body) {
   return { version: assignment[1], tag: `v${assignment[1]}` };
 }
 
+async function completeReleaseIssue({ github, context, issueNumber, version, release }) {
+  const repo = context.repo;
+  if (!release) {
+    ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag: `v${version}` }));
+  }
+  const required = [`MathBeatStudio-${version}-unsigned.ipa`, 'SHA256SUMS.txt'];
+  if (release.tag_name !== `v${version}` || release.draft || release.prerelease ||
+      !required.every(name => release.assets?.some(asset => asset.name === name && asset.state === 'uploaded' && asset.size > 0))) {
+    return false;
+  }
+  // Re-read the issue in case the version request changed while the IPA was building.
+  const { data: issue } = await github.rest.issues.get({ ...repo, issue_number: issueNumber });
+  if (issue.pull_request || parseReleaseIssue(issue.title, issue.body)?.version !== version) {
+    throw new Error(`Issue #${issueNumber} no longer requests v${version}; leaving it unchanged.`);
+  }
+  try {
+    await github.rest.issues.getLabel({ ...repo, name: 'releasedabot' });
+  } catch (error) {
+    if (error.status !== 404) throw error;
+    try {
+      await github.rest.issues.createLabel({ ...repo, name: 'releasedabot', color: '91F8BA', description: 'Version released by ReleaseDaBot' });
+    } catch (createError) {
+      // Another release may have created the shared label in the meantime.
+      if (createError.status !== 422) throw createError;
+      await github.rest.issues.getLabel({ ...repo, name: 'releasedabot' });
+    }
+  }
+  await github.rest.issues.addLabels({ ...repo, issue_number: issueNumber, labels: ['releasedabot'] });
+  await github.rest.issues.update({ ...repo, issue_number: issueNumber, state: 'closed', state_reason: 'completed' });
+  return true;
+}
+
 async function scan({ github, context, core }) {
   const repo = context.repo;
   const canRelease = async username => {
@@ -41,16 +73,21 @@ async function scan({ github, context, core }) {
     let request;
     try { request = parseReleaseIssue(issue.title, issue.body); }
     catch (error) { core.warning(`Issue #${issue.number}: ${error.message}`); continue; }
-    if (!request || seen.has(request.version)) continue;
+    if (!request) continue;
     if (!await canRelease(issue.user.login)) {
       core.warning(`Issue #${issue.number}: author needs repository write access.`);
       continue;
     }
+    let release;
     try {
-      await github.rest.repos.getReleaseByTag({ ...repo, tag: request.tag });
-      core.info(`Issue #${issue.number}: ${request.tag} already has a release; skipping.`);
-      continue;
+      ({ data: release } = await github.rest.repos.getReleaseByTag({ ...repo, tag: request.tag }));
     } catch (error) { if (error.status !== 404) throw error; }
+    if (release) {
+      const completed = await completeReleaseIssue({ github, context, issueNumber: issue.number, version: request.version, release });
+      core.info(`Issue #${issue.number}: existing release ${completed ? 'verified; labeled and closed' : 'incomplete; issue remains open'}.`);
+      continue;
+    }
+    if (seen.has(request.version)) continue;
     seen.add(request.version);
     releases.push({ version: request.version, issue: issue.number });
   }
@@ -67,4 +104,4 @@ async function scan({ github, context, core }) {
   ).write();
 }
 
-module.exports = { parseReleaseIssue, scan };
+module.exports = { parseReleaseIssue, scan, completeReleaseIssue };
