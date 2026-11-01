@@ -5,7 +5,7 @@ enum Waveform: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct BeatProject: Codable, Identifiable {
+struct BeatProject: Codable, Identifiable, Equatable {
     var id = UUID()
     var name = "Untitled Beat"
     var bpm: Double = 120

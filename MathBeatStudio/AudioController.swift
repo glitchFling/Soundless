@@ -4,6 +4,7 @@ import Combine
 @MainActor
 final class AudioController: ObservableObject {
     @Published private(set) var isPlaying = false
+    @Published private(set) var isPreparing = false
     @Published var errorMessage: String?
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
@@ -11,6 +12,7 @@ final class AudioController: ObservableObject {
     private var generation = UUID()
     private var renderTask: Task<Void, Never>?
     private var observer: NSObjectProtocol?
+    private var requestedProject: BeatProject?
 
     init() {
         engine.attach(player)
@@ -25,11 +27,13 @@ final class AudioController: ObservableObject {
     deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
 
     func update(_ project: BeatProject) {
+        requestedProject = project
         guard isPlaying else { return }
         renderTask?.cancel()
         let token = generation
         renderTask = Task {
             do {
+                try await Task.sleep(for: .milliseconds(80))
                 let buffer = try await Task.detached(priority: .userInitiated) {
                     try LoopRenderer.render(project)
                 }.value
@@ -41,6 +45,8 @@ final class AudioController: ObservableObject {
 
     func play(_ project: BeatProject) {
         stop()
+        requestedProject = project
+        isPreparing = true
         let token = generation
         renderTask = Task {
             do {
@@ -58,7 +64,12 @@ final class AudioController: ObservableObject {
                 enqueue(buffer, token: token)
                 player.play()
                 isPlaying = true
-            } catch { stop(); errorMessage = error.localizedDescription }
+                isPreparing = false
+                if let requestedProject, requestedProject != project { update(requestedProject) }
+            } catch {
+                guard !Task.isCancelled, token == generation else { return }
+                stop(); errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -76,9 +87,11 @@ final class AudioController: ObservableObject {
         renderTask?.cancel()
         renderTask = nil
         isPlaying = false
+        isPreparing = false
         player.stop()
         engine.stop()
         latest = nil
+        requestedProject = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 }

@@ -1,0 +1,32 @@
+name: iOS Build Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test release issue parsing
+        run: node --test .github/scripts/release-issue.test.cjs
+      - name: Compile for iPhone Simulator
+        run: |
+          set -euo pipefail
+          xcodebuild -project MathBeatStudio.xcodeproj \
+            -scheme MathBeatStudio -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build
