@@ -72,7 +72,9 @@ final class AudioController: ObservableObject {
     private var renderTask: Task<Void, Never>?
     private var observer: NSObjectProtocol?
 
-    init(output: (any LoopAudioOutput)? = nil, render: @escaping Render = AudioController.renderInBackground) {
+    init(output: (any LoopAudioOutput)? = nil, render: @escaping Render = { pattern in
+        try await AudioController.renderInBackground(pattern)
+    }) {
         self.output = output ?? EngineAudioOutput()
         self.render = render
         #if os(iOS)
