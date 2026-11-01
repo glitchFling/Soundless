@@ -1,22 +1,33 @@
 import AVFoundation
 
+// The buffer is written only during rendering and is immutable once handed to the player.
+struct RenderedLoop: @unchecked Sendable {
+    let pattern: SoundPattern
+    let timing: LoopTiming
+    let buffer: AVAudioPCMBuffer
+
+    func position(sampleTime: Int64) -> PlaybackPosition { timing.position(sampleTime: sampleTime, pattern: pattern) }
+}
+
 enum LoopRenderer {
     static let sampleRate = 44_100.0
 
-    static func render(_ project: BeatProject) throws -> AVAudioPCMBuffer {
-        let project = try project.validated()
-        let samplesPerStep = sampleRate * 60 / project.bpm / 4
-        let count = Int((samplesPerStep * 16).rounded())
+    static func render(_ pattern: SoundPattern) throws -> RenderedLoop {
+        let project = try BeatProject(bpm: pattern.bpm, waveform: pattern.waveform, steps: pattern.steps).validated()
+        let timing = LoopTiming(bpm: project.bpm, sampleRate: sampleRate)
+        let count = timing.frameCount
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
               let output = buffer.floatChannelData?[0] else { throw CocoaError(.coderInvalidValue) }
         buffer.frameLength = AVAudioFrameCount(count)
         for step in 0..<16 {
-            let start = Int((Double(step) * samplesPerStep).rounded())
-            let end = Int((Double(step + 1) * samplesPerStep).rounded())
+            try Task.checkCancellation()
+            let start = timing.boundaries[step]
+            let end = timing.boundaries[step + 1]
             let length = end - start
             let frequency = project.steps[step].map { 440 * pow(2, Double($0 - 69) / 12) }
             for offset in 0..<length {
+                if offset % 1024 == 0 { try Task.checkCancellation() }
                 guard let frequency else { output[start + offset] = 0; continue }
                 let phase = (Double(offset) * frequency / sampleRate).truncatingRemainder(dividingBy: 1)
                 var value = 0.0
@@ -45,6 +56,6 @@ enum LoopRenderer {
                 output[start + offset] = Float(value * attack * release * 0.22)
             }
         }
-        return buffer
+        return RenderedLoop(pattern: pattern, timing: timing, buffer: buffer)
     }
 }

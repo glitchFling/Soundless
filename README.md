@@ -14,11 +14,13 @@ For an IPA, select a generic iOS device destination, use Product → Archive, th
 
 The studio uses a dark mint interface with waveform previews, large step pads, haptic selection feedback, and a persistent play/stop bar. Tap a pad to open its pitch and rest editor. Tempo supports a slider and one-BPM adjustment buttons. The grid uses four columns on narrow screens, eight when space permits, and two at accessibility text sizes. Controls respect Dynamic Type and reduced-motion preferences. Saved sessions appear in the project library with tempo and oscillator details.
 
-Playback shows a cancellable preparation state. Rapid edits are debounced for 80 ms before rendering to keep controls responsive, and edits made during startup are applied after playback begins. PCM scheduling still determines note timing.
+The Now Playing card shows the current note or rest, step number, and loop progress. An orange play marker distinguishes the sounding step from the mint editing selection. The selected oscillator has a dot that follows its trace; rests dim it, and Reduced Motion keeps it stationary. Visuals sample the player clock at up to 30 fps; PCM audio still determines note timing.
+
+While playing, sound edits render in the background and restart at step 1 as soon as the newest audio is ready, with a short outgoing fade. Edits during initial loading replace the pending loop. Editing while stopped stays silent. Project-name changes and saving do not restart playback. Stop, backgrounding, and interruptions cancel pending work.
 
 Choose pitches or rests for 16 sixteenth-note steps, set 40–240 BPM, choose sine/square/triangle/sawtooth, and tap Play Loop. Save writes a project to the app's Documents/Projects folder as atomic, readable JSON. Saving a loaded project updates that project. Projects opens saved beats, supports swipe-to-delete, and creates new projects.
 
-Each loop is one 4/4 bar, rendered at 44.1 kHz into a mono PCM buffer. Notes use MIDI pitches 48–84 (C3–C6), with short attack/release envelopes. Non-sine waveforms use additive synthesis with up to 64 harmonics below Nyquist. The player queues complete loop buffers ahead of playback; callbacks replenish the queue and never trigger individual notes. Buffer length is rounded once per loop to the nearest sample. Edits render off the main actor and enter the queue at a future loop boundary, normally within two bars. Playback stops when the app leaves the active state or receives an audio interruption.
+Each loop is one 4/4 bar, rendered at 44.1 kHz into a mono PCM buffer. Notes use MIDI pitches 48–84 (C3–C6), with short attack/release envelopes. Non-sine waveforms use additive synthesis with up to 64 harmonics below Nyquist. The player repeats a whole PCM buffer with AVAudioPlayerNode looping. Rendering and visual progress share the same rounded step frame boundaries. Buffer length is rounded once per loop to the nearest sample. A replacement resets the player clock while leaving the engine active. Playback stops when the app leaves the active state or receives an audio interruption.
 
 ## Verification on a Mac
 
@@ -29,9 +31,11 @@ xcodebuild -project MathBeatStudio.xcodeproj -scheme MathBeatStudio \
 
 Check all waveforms, rests, full-range tempo changes while playing, repeated start/stop, backgrounding, interruption behavior, and save/load/delete across relaunch. At 120 BPM a loop should last 2 seconds; at 60 BPM, 4 seconds. Listen across several boundaries for gaps or clicks. Test on a physical device before distribution.
 
-The project was authored on Windows, where Xcode and the iOS SDK are unavailable. Compilation, simulator execution, device audio, signing, and IPA export have not been verified here.
+The project is authored on Windows; native compilation, audio checks, and simulator previews run on GitHub's macOS runner. Physical-device audio, signing, and installation require a supported Mac/iPhone setup.
 
-The `iOS Build Check` GitHub Actions workflow compiles for iPhone Simulator on pushes to main and pull requests. Physical-device audio and visual layout still require review on a supported Mac or iPhone.
+The `iOS Build Check` workflow runs native playback checks with an injected audio output, compiles for iPhone Simulator, launches the app, and uploads a `studio-preview` screenshot artifact. The native checks cover render boundaries and rests at 40–240 BPM, wrapping, cancellation, immediate replacement, latest-edit wins, startup edits, cancelled fades, failed renders, stopped editing, and waveform geometry. Review touch behavior and audio transitions on a physical iPhone before distributing.
+
+The Home Screen icon is an opaque 1024×1024 waveform-and-dot mark in the AppIcon asset catalog. To regenerate it, install Pillow and run `python scripts/render_app_icon.py`.
 
 ## ReleaseDaBot
 

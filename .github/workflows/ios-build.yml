@@ -23,10 +23,44 @@ jobs:
           persist-credentials: false
       - name: Test release issue parsing
         run: node --test .github/scripts/release-issue.test.cjs
+      - name: Verify audio rendering and replay behavior
+        run: |
+          set -euo pipefail
+          xcrun swiftc -parse-as-library -swift-version 5 \
+            -target "$(uname -m)-apple-macosx14.0" \
+            MathBeatStudio/Project.swift MathBeatStudio/PlaybackPosition.swift \
+            MathBeatStudio/LoopRenderer.swift MathBeatStudio/AudioController.swift \
+            MathBeatStudio/StudioStyle.swift Tests/PlaybackChecks.swift \
+            -o "$RUNNER_TEMP/playback-checks"
+          "$RUNNER_TEMP/playback-checks"
       - name: Compile for iPhone Simulator
         run: |
           set -euo pipefail
           xcodebuild -project MathBeatStudio.xcodeproj \
             -scheme MathBeatStudio -configuration Debug \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/MathBeatBuild" \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Capture iPhone Simulator preview
+        run: |
+          set -euo pipefail
+          DEVICE=$(xcrun simctl list devices available --json | python3 -c '
+          import json, sys
+          devices = [d for runtime, items in json.load(sys.stdin)["devices"].items() if ".iOS-" in runtime for d in items if "iPhone" in d["name"]]
+          devices.sort(key=lambda d: ("SE" not in d["name"], d["name"]))
+          print(devices[0]["udid"])
+          ')
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl bootstatus "$DEVICE" -b
+          xcrun simctl status_bar "$DEVICE" override --time '9:41' --batteryState charged --batteryLevel 100
+          xcrun simctl install "$DEVICE" "$RUNNER_TEMP/MathBeatBuild/Build/Products/Debug-iphonesimulator/MathBeatStudio.app"
+          xcrun simctl launch "$DEVICE" com.example.MathBeatStudio
+          sleep 4
+          mkdir -p previews
+          xcrun simctl io "$DEVICE" screenshot previews/studio-iphone.png
+      - name: Upload simulator preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: studio-preview
+          path: previews/*.png
+          if-no-files-found: error

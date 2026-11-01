@@ -20,9 +20,17 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 24) {
                         header
                         sessionCard
+                        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !audio.isPlaying)) { _ in
+                            nowPlaying(position: audio.playbackPosition)
+                        }
                         tempoCard
-                        oscillatorCard
-                        sequencer(width: geometry.size.width)
+                        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !audio.isPlaying)) { _ in
+                            let position = audio.playbackPosition
+                            VStack(alignment: .leading, spacing: 24) {
+                                oscillatorCard(position: position)
+                                sequencer(width: geometry.size.width, position: position)
+                            }
+                        }
                         Text("One bar. Sixteen possibilities.")
                             .font(.footnote).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity).padding(.bottom, 12)
@@ -39,7 +47,14 @@ struct ContentView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) { transport }
             .sheet(isPresented: $showingProjects) { library }
             .sheet(isPresented: $showingStepEditor) {
-                ScrollView { stepEditor.padding(20) }
+                ScrollView {
+                    VStack(spacing: 20) {
+                        stepEditor
+                        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !audio.isPlaying)) { _ in
+                            nowPlaying(position: audio.playbackPosition)
+                        }
+                    }.padding(20)
+                }
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -131,16 +146,15 @@ struct ContentView: View {
             .disabled(change < 0 ? project.bpm == 40 : project.bpm == 240)
     }
 
-    private var oscillatorCard: some View {
+    private func oscillatorCard(position: PlaybackPosition) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             sectionLabel("SOUND SHAPE", symbol: "waveform")
             LazyVGrid(columns: [GridItem(.adaptive(minimum: typeSize.isAccessibilitySize ? 130 : 100), spacing: 10)], spacing: 10) {
                 ForEach(Waveform.allCases) { waveform in
                     Button { project.waveform = waveform } label: {
                         VStack(spacing: 12) {
-                            WaveformTrace(waveform: waveform)
-                                .stroke(project.waveform == waveform ? mint : .gray, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
-                                .frame(height: 26).padding(.horizontal, 10)
+                            WaveformPreview(waveform: waveform, selected: project.waveform == waveform,
+                                            position: position, tint: mint).padding(.horizontal, 10)
                             Text(waveform.rawValue.capitalized).font(.caption.weight(.semibold))
                                 .foregroundStyle(project.waveform == waveform ? mint : .gray)
                         }
@@ -155,7 +169,7 @@ struct ContentView: View {
         }.studioCard()
     }
 
-    private func sequencer(width: CGFloat) -> some View {
+    private func sequencer(width: CGFloat, position: PlaybackPosition) -> some View {
         let columns = typeSize.isAccessibilitySize ? 2 : (width >= 600 ? 8 : 4)
         return VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -167,28 +181,70 @@ struct ContentView: View {
                 ForEach(0..<16, id: \.self) { step in
                     let note = project.steps[step]
                     let selected = selectedStep == step
+                    let playing = position.step == step
                     Button { selectedStep = step; showingStepEditor = true } label: {
                         VStack(alignment: .leading, spacing: 14) {
                             HStack {
                                 Text(String(format: "%02d", step + 1)).font(.caption2.monospaced())
                                 Spacer(minLength: 0)
-                                Circle().fill(note == nil ? .gray.opacity(0.4) : mint).frame(width: 5, height: 5)
+                                if playing {
+                                    Image(systemName: "play.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                                } else {
+                                    Circle().fill(note == nil ? .gray.opacity(0.4) : mint).frame(width: 5, height: 5)
+                                }
                             }.foregroundStyle(.secondary)
                             Text(note.map(studioNoteName) ?? "—")
                                 .font(.system(.headline, design: .rounded, weight: .bold))
                                 .foregroundStyle(note == nil ? Color.secondary : Color.white)
-                            Capsule().fill(note == nil ? .white.opacity(0.08) : mint.opacity(selected ? 1 : 0.4)).frame(height: 3)
+                            Capsule().fill(playing ? Color.orange : (note == nil ? .white.opacity(0.08) : mint.opacity(selected ? 1 : 0.4))).frame(height: 3)
                         }
                         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                         .background(selected ? mint.opacity(0.15) : .white.opacity(note == nil ? 0.025 : 0.065), in: RoundedRectangle(cornerRadius: 14))
                         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(selected ? mint : .clear, lineWidth: 1.5))
                     }.buttonStyle(StudioPressStyle())
                         .accessibilityLabel("Step \(step + 1), \(note.map(studioNoteName) ?? "rest")")
+                        .accessibilityValue(playing ? "Playing" : "")
                         .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             }
             Text("Tap a step to shape its note.").font(.caption).foregroundStyle(.secondary)
         }.sensoryFeedback(.selection, trigger: selectedStep)
+    }
+
+    private func nowPlaying(position: PlaybackPosition) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionLabel("NOW PLAYING", symbol: "waveform")
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    playingNote(position)
+                    Spacer(minLength: 16)
+                    playingStep(position)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    playingNote(position)
+                    playingStep(position)
+                }
+            }
+            ProgressView(value: position.progress, total: 1)
+                .tint(mint)
+                .accessibilityLabel("Loop progress")
+                .accessibilityValue(position.step.map { "Step \($0 + 1) of 16" } ?? "Stopped")
+            Text(audio.isPreparing ? "Preparing your loop…" : (audio.isUpdating ? "Updating sound · restarting from step 1…" : (audio.isPlaying ? "Following the playing notes" : "Press Play to hear your sequence")))
+                .font(.caption).foregroundStyle(.secondary)
+        }.studioCard()
+    }
+
+    private func playingNote(_ position: PlaybackPosition) -> some View {
+        Text(position.step == nil ? "Ready" : (position.note.map(studioNoteName) ?? "Rest"))
+            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+            .foregroundStyle(position.isSounding ? mint : Color.secondary)
+            .accessibilityLabel("Current note")
+            .accessibilityValue(position.step == nil ? "Stopped" : (position.note.map(studioNoteName) ?? "Rest"))
+    }
+
+    private func playingStep(_ position: PlaybackPosition) -> some View {
+        Text(position.step.map { String(format: "STEP %02d / 16", $0 + 1) } ?? "NO NOTE PLAYING")
+            .font(.caption.monospaced().weight(.semibold)).foregroundStyle(.secondary)
     }
 
     private var stepEditor: some View {
@@ -228,7 +284,7 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, minHeight: 56)
                 .background(mint, in: RoundedRectangle(cornerRadius: 18))
             }.buttonStyle(StudioPressStyle())
-            Text(audio.isPlaying ? "LOOPING · EDITS JOIN AT A LOOP BOUNDARY" : "READY WHEN YOU ARE")
+            Text(audio.isPlaying ? "LOOPING · EDITS REPLAY IMMEDIATELY" : "READY WHEN YOU ARE")
                 .font(.caption2.weight(.medium)).tracking(1).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
         .frame(maxWidth: 760).padding(.horizontal, 20).padding(.top, 16).padding(.bottom, 10)

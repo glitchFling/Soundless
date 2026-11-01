@@ -1,6 +1,6 @@
 import Foundation
 
-enum Waveform: String, Codable, CaseIterable, Identifiable {
+enum Waveform: String, Codable, CaseIterable, Identifiable, Sendable {
     case sine, square, triangle, sawtooth
     var id: String { rawValue }
 }
@@ -13,6 +13,8 @@ struct BeatProject: Codable, Identifiable, Equatable {
     // Each step is a sixteenth note; nil represents a rest.
     var steps: [Int?] = [60, nil, 64, nil, 67, nil, 64, nil, 60, nil, 65, nil, 69, nil, 67, nil]
 
+    var soundPattern: SoundPattern { SoundPattern(bpm: bpm, waveform: waveform, steps: steps) }
+
     func validated() throws -> Self {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               bpm.isFinite, (40...240).contains(bpm), steps.count == 16,
@@ -21,6 +23,13 @@ struct BeatProject: Codable, Identifiable, Equatable {
         }
         return self
     }
+}
+
+// Only these values affect sound; renaming or saving a project never restarts audio.
+struct SoundPattern: Equatable, Sendable {
+    var bpm: Double
+    var waveform: Waveform
+    var steps: [Int?]
 }
 
 enum ProjectStore {
