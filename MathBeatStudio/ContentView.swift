@@ -93,11 +93,16 @@ struct ContentView: View {
 
     private var tempoCard: some View {
         VStack(spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                sectionLabel("TEMPO", symbol: "metronome")
-                Spacer()
-                Text("\(Int(project.bpm))").font(.system(.largeTitle, design: .rounded, weight: .bold)).monospacedDigit()
-                Text("BPM").font(.caption.bold()).foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline) {
+                    sectionLabel("TEMPO", symbol: "metronome")
+                    Spacer()
+                    tempoReadout
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionLabel("TEMPO", symbol: "metronome")
+                    tempoReadout
+                }.frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack(spacing: 16) {
                 tempoButton(-1, symbol: "minus")
@@ -108,6 +113,13 @@ struct ContentView: View {
             HStack { Text("40 · SLOW"); Spacer(); Text("FAST · 240") }
                 .font(.caption2.monospaced()).foregroundStyle(.secondary)
         }.studioCard()
+    }
+
+    private var tempoReadout: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("\(Int(project.bpm))").font(.system(.largeTitle, design: .rounded, weight: .bold)).monospacedDigit()
+            Text("BPM").font(.caption.bold()).foregroundStyle(.secondary)
+        }
     }
 
     private func tempoButton(_ change: Double, symbol: String) -> some View {
